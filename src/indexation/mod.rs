@@ -1,8 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use tantivy::{Directory, Document, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyError, Term};
-use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
+use tantivy::{Directory, Document, Index, IndexWriter, TantivyError, Term};
 use tantivy::schema::{IndexRecordOption, Schema, TextFieldIndexing, TextOptions};
 use tantivy::tokenizer::{AsciiFoldingFilter, Language, LowerCaser, NgramTokenizer, RemoveLongFilter, Stemmer, TextAnalyzer};
 use tokio::sync::mpsc;
@@ -31,7 +29,6 @@ fn es_ngram2_analyzer() -> TextAnalyzer {
 
 struct IndexActor {
     receiver: mpsc::Receiver<IndexActorMessage>,
-    index: Index,
     index_writer: Arc<Mutex<IndexWriter>>,
 }
 
@@ -51,12 +48,11 @@ impl IndexActor {
 
         Ok(IndexActor {
             receiver,
-            index,
             index_writer: Arc::new(Mutex::new(index_writer)),
         })
     }
 
-    async fn handle_message(&mut self, msg: IndexActorMessage) -> Result<(), TantivyError> {
+    fn handle_message(&mut self, msg: IndexActorMessage) -> Result<(), TantivyError> {
         match msg {
             IndexActorMessage::Single { doc, schema } => {
                 if let Some(id_field) = schema.get_field("id") {
@@ -98,7 +94,7 @@ impl IndexActor {
 
 async fn run_index_actor(mut actor: IndexActor) {
     while let Some(msg) = actor.receiver.recv().await {
-        if let Err(e) = actor.handle_message(msg).await {
+        if let Err(e) = actor.handle_message(msg) {
             tracing::error!("error while handling message in index actor: {:?}", e);
         }
     }
@@ -107,9 +103,6 @@ async fn run_index_actor(mut actor: IndexActor) {
 #[derive(Clone)]
 pub struct IndexActorHandle {
     sender: mpsc::Sender<IndexActorMessage>,
-    reader: IndexReader,
-    query_parser: QueryParser,
-    new_schema: fn() -> Schema,
 }
 
 impl IndexActorHandle {
@@ -117,34 +110,12 @@ impl IndexActorHandle {
         let (sender, receiver) = mpsc::channel(8);
         let actor = IndexActor::new(dir, new_schema, receiver)?;
 
-        let reader = actor.index
-            .reader_builder()
-            .reload_policy(ReloadPolicy::OnCommit)
-            .try_into()?;
-
-        let query_parser = QueryParser::for_index(&actor.index, vec![]); // TODO: specify default fields
-
         tokio::spawn(run_index_actor(actor));
 
-        Ok(Self { sender, reader, query_parser, new_schema })
+        Ok(Self { sender })
     }
 
     pub async fn index_single(&self, doc: Document, schema: Schema) {
         let _ = self.sender.send(IndexActorMessage::Single { doc, schema }).await;
-    }
-
-    pub fn search(&self, query: &str) -> Result<(), TantivyError> { // TODO: this should return an array of something instead of empty tuple
-        let new_schema = self.new_schema;
-        let searcher = self.reader.searcher();
-        let query = self.query_parser.parse_query(query)?;
-
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
-
-        for (_score, doc_address) in top_docs {
-            let retrieved_doc = searcher.doc(doc_address)?;
-            println!("{}", new_schema().to_json(&retrieved_doc));
-        }
-
-        Ok(())
     }
 }
