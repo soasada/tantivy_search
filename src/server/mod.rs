@@ -1,15 +1,14 @@
 use std::fs;
-use std::sync::Arc;
 
 use axum::{
-    Router, routing::post,
+    Router, routing::get, routing::post,
 };
 use tantivy::directory::MmapDirectory;
 use tantivy::schema::Schema;
 use tantivy::TantivyError;
 
 use crate::indexation::IndexActorHandle;
-use crate::question::{index_question, new_question_schema};
+use crate::question::{index_question, new_question_schema, search_question};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,8 +25,8 @@ pub fn new_router() -> Result<Router, TantivyError> {
     };
 
     Ok(Router::new()
-        .route("/questions", post(index_question))
-        .with_state(Arc::new(app_state)))
+        .route("/questions", get(search_question).post(index_question))
+        .with_state(app_state))
 }
 
 fn new_index_actor(path: &str, new_schema: fn() -> Schema) -> Result<IndexActorHandle, TantivyError> {

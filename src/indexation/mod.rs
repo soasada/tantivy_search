@@ -1,8 +1,10 @@
 use std::sync::{Arc, Mutex};
 
-use tantivy::{Directory, Document, Index, IndexWriter, TantivyError, Term};
-use tantivy::schema::{IndexRecordOption, Schema, TextFieldIndexing, TextOptions};
-use tantivy::tokenizer::{AsciiFoldingFilter, Language, LowerCaser, NgramTokenizer, RemoveLongFilter, Stemmer, TextAnalyzer};
+use tantivy::{Directory, Document, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyError, Term};
+use tantivy::collector::TopDocs;
+use tantivy::query::TermQuery;
+use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions};
+use tantivy::tokenizer::{AsciiFoldingFilter, Language, LowerCaser, NgramTokenizer, RemoveLongFilter, Stemmer, StopWordFilter, TextAnalyzer};
 use tokio::sync::mpsc;
 
 pub trait Indexer {
@@ -24,12 +26,14 @@ fn es_ngram2_analyzer() -> TextAnalyzer {
         .filter(RemoveLongFilter::limit(40))
         .filter(LowerCaser)
         .filter(AsciiFoldingFilter) // remove accents
+        .filter(StopWordFilter::new(Language::Spanish).unwrap())
         .filter(Stemmer::new(Language::Spanish))
 }
 
 struct IndexActor {
+    index: Index,
     receiver: mpsc::Receiver<IndexActorMessage>,
-    index_writer: Arc<Mutex<IndexWriter>>,
+    writer: Arc<Mutex<IndexWriter>>,
 }
 
 enum IndexActorMessage {
@@ -44,11 +48,15 @@ impl IndexActor {
         let index = Index::open_or_create(dir, new_schema())?;
         index.tokenizers()
             .register("ngram2", es_ngram2_analyzer());
-        let index_writer = index.writer(50_000_000)?;
+
+        // Should only be one writer at a time. This single IndexWriter is already
+        // multithreaded.
+        let writer = index.writer(50_000_000)?;
 
         Ok(IndexActor {
+            index,
             receiver,
-            index_writer: Arc::new(Mutex::new(index_writer)),
+            writer: Arc::new(Mutex::new(writer)),
         })
     }
 
@@ -60,10 +68,10 @@ impl IndexActor {
                         if let Some(id) = id_value.as_text() {
                             let str_id = String::from(id);
                             let id_term = Term::from_field_text(id_field, id);
-                            let index_writer = Arc::clone(&self.index_writer);
+                            let writer = Arc::clone(&self.writer);
 
                             tokio::task::spawn_blocking(move || {
-                                if let Ok(mut writer) = index_writer.lock() {
+                                if let Ok(mut writer) = writer.lock() {
                                     writer.delete_term(id_term);
                                     if let Err(e) = writer.add_document(doc) {
                                         tracing::error!("error adding single document to index: {:?}", e);
@@ -103,6 +111,7 @@ async fn run_index_actor(mut actor: IndexActor) {
 #[derive(Clone)]
 pub struct IndexActorHandle {
     sender: mpsc::Sender<IndexActorMessage>,
+    reader: IndexReader,
 }
 
 impl IndexActorHandle {
@@ -110,12 +119,38 @@ impl IndexActorHandle {
         let (sender, receiver) = mpsc::channel(8);
         let actor = IndexActor::new(dir, new_schema, receiver)?;
 
+        // For a search server you will typically create on reader for the entire
+        // lifetime of your program.
+        let reader = actor.index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::OnCommit)
+            .try_into()?;
+
         tokio::spawn(run_index_actor(actor));
 
-        Ok(Self { sender })
+        Ok(Self { sender, reader })
     }
 
     pub async fn index_single(&self, doc: Document, schema: Schema) {
         let _ = self.sender.send(IndexActorMessage::Single { doc, schema }).await;
+    }
+
+    pub fn search(&self, field: Field, query: &str, schema: Schema) -> Result<(), TantivyError> { // TODO: this should return an array of something instead of empty tuple
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(field, query),
+            IndexRecordOption::Basic,
+        );
+
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
+
+        tracing::info!("total searched docs: {}", top_docs.len());
+
+        for (_score, doc_address) in top_docs {
+            let retrieved_doc = searcher.doc(doc_address)?;
+            tracing::info!("{}", schema.to_json(&retrieved_doc));
+        }
+
+        Ok(())
     }
 }
