@@ -15,6 +15,7 @@ pub struct IndexActor {
     receiver: mpsc::Receiver<IndexActorMessage>,
     writer: IndexWriter,
     pub must_reindex: bool,
+    must_commit: bool,
 }
 
 #[derive(Debug)]
@@ -75,6 +76,7 @@ impl IndexActor {
             receiver,
             writer,
             must_reindex,
+            must_commit: false,
         })
     }
 
@@ -91,9 +93,10 @@ impl IndexActor {
 
                             if let Err(e) = self.writer.add_document(doc) {
                                 tracing::error!("error adding single document to index: {:?}", e);
+                            } else {
+                                self.must_commit = true;
+                                tracing::info!("{} document with id: {} successfully indexed", &self.name, str_id);
                             }
-
-                            tracing::info!("{} document with id: {} successfully indexed", &self.name, str_id);
 
                             Ok(())
                         } else {
@@ -107,8 +110,10 @@ impl IndexActor {
                 }
             }
             IndexActorMessage::Commit => {
-                if let Ok(opstamp) = self.writer.commit() {
+                if self.must_commit {
+                    let opstamp = self.writer.commit()?;
                     let index_name = &self.name;
+                    self.must_commit = false;
                     tracing::info!("{index_name} documents committed successfully with opstamp: {opstamp}");
                 }
 
@@ -119,7 +124,7 @@ impl IndexActor {
                     let id_term = Term::from_field_text(id_field, id.as_str());
 
                     self.writer.delete_term(id_term);
-
+                    self.must_commit = true;
                     tracing::info!("document {} successfully deleted", id);
 
                     Ok(())
