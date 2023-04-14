@@ -1,0 +1,15 @@
+{
+  "iteration_count": 1,
+  "duration": 1,
+  "steps": [
+    {
+      "id": 1,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "url": "http://localhost:8079/questions/reindex",
+      "method": "POST",
+      "payload_file": "./reindex_question_payload.json"
+    }
+  ]
+}

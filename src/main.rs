@@ -54,7 +54,7 @@ async fn main() {
         Err(e) => panic!("Error creating router: {:?}", e)
     };
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8079));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8079));
     tracing::debug!("listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app_router.into_make_service())
