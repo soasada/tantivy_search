@@ -1,4 +1,6 @@
-use tantivy::{Directory, Document, IndexReader, ReloadPolicy, TantivyError};
+use std::thread;
+
+use tantivy::{Directory, Document, IndexReader, ReloadPolicy, Score, TantivyError};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::Schema;
@@ -14,15 +16,20 @@ pub struct IndexActorHandle {
     query_parser: QueryParser,
 }
 
+pub struct SearchDocument {
+    pub doc: Document,
+    pub score: Score,
+}
+
 impl IndexActorHandle {
     pub async fn new(dir: impl Directory, schema: Schema, index_name: String, backend_env: AppEnv) -> Result<Self, TantivyError> {
         let schema_clone = schema.clone();
         let (sender, receiver) = mpsc::channel(8);
-        let actor = IndexActor::new(dir, schema, receiver)?;
+        let actor = IndexActor::new(index_name.clone(), dir, schema, receiver)?;
 
         if actor.must_reindex {
             let _ = sender
-                .send(IndexActorMessage::Reindex { backend_env, index_name: index_name.clone() })
+                .send(IndexActorMessage::Reindex { backend_env })
                 .await;
         }
 
@@ -41,7 +48,7 @@ impl IndexActorHandle {
         let query_parser = QueryParser::new(schema_clone, fields, actor.index.tokenizers().clone());
 
         tokio::spawn(run_commit_index(sender.clone(), index_name));
-        tokio::spawn(run_index_actor(actor));
+        thread::spawn(move || run_index_actor(actor));
 
         Ok(Self { sender, reader, query_parser })
     }
@@ -53,21 +60,21 @@ impl IndexActorHandle {
     #[cfg(test)]
     pub async fn commit(&self, index_name: String) {
         self.sender
-            .send(IndexActorMessage::Commit { index_name: index_name.clone() })
+            .send(IndexActorMessage::Commit)
             .await
             .unwrap_or_else(|_| panic!("{} index actor has been killed for commit while testing", index_name.clone()));
     }
 
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<Document>, TantivyError> {
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchDocument>, TantivyError> {
         let searcher = self.reader.searcher();
         let query = self.query_parser.parse_query(query)?;
 
         let search_task = tokio::task::spawn_blocking(move || {
             let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
             let mut docs = Vec::with_capacity(limit);
-            for (_score, doc_address) in top_docs {
+            for (score, doc_address) in top_docs {
                 let retrieved_doc = searcher.doc(doc_address)?;
-                docs.push(retrieved_doc);
+                docs.push(SearchDocument { doc: retrieved_doc, score });
             }
 
             Ok(docs)

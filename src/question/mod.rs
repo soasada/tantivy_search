@@ -47,22 +47,25 @@ pub fn question_fields() -> QuestionFields {
 #[cfg(test)]
 mod tests {
     use tantivy::directory::RamDirectory;
+    use tracing_subscriber::EnvFilter;
     use uuid::Uuid;
 
     use crate::AppEnv;
     use crate::indexation::handle::IndexActorHandle;
-    use crate::indexation::Indexer;
-    use crate::question::indexation::{IndexQuestion, QuestionIndexer};
+    use crate::question::indexation::{IndexQuestion, new_document};
     use crate::question::new_question_schema;
 
     async fn new_question_index_handle() -> IndexActorHandle {
         let dir = RamDirectory::create();
-        IndexActorHandle::new(dir, new_question_schema, String::from("test"), AppEnv::new("dev".to_string())).await.unwrap()
+        IndexActorHandle::new(dir, new_question_schema(), String::from("test"), AppEnv::new("dev".to_string())).await.unwrap()
     }
 
     #[tokio::test]
     async fn it_should_index_a_single_question() {
-        tracing_subscriber::fmt::init();
+        tracing_subscriber::fmt()
+            .with_thread_ids(true)
+            .with_env_filter(EnvFilter::from_default_env())
+            .init();
         let question_index_handle = new_question_index_handle().await;
         let question_to_index = IndexQuestion {
             id: Uuid::new_v4().to_string(),
@@ -73,23 +76,16 @@ mod tests {
         };
 
         // Index a question
-        let indexer = QuestionIndexer::new(question_to_index);
-        question_index_handle.index_single(indexer.new_document(), new_question_schema()).await;
+        question_index_handle.index_single(new_document(&question_to_index)).await;
 
         // Search by 'caballo', should be a spawn to not block the thread of the test and to wait until the question is indexed.
         let search_query = "caballo";
-        let result = tokio::spawn(async move {
-            let mut result = question_index_handle.search(search_query, 10).unwrap();
+        let mut result = question_index_handle.search(search_query, 10).await.unwrap();
 
-            while result.is_empty() {
-                question_index_handle.commit(String::from("test")).await;
-                result = question_index_handle.search(search_query, 10).unwrap();
-            }
-
-            result
-        });
-
-        let result = result.await.unwrap();
+        while result.is_empty() {
+            question_index_handle.commit(String::from("test")).await;
+            result = question_index_handle.search(search_query, 10).await.unwrap();
+        }
 
         assert_eq!(result.len(), 1);
     }

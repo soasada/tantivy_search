@@ -3,9 +3,10 @@ use axum::http::StatusCode;
 use axum::Json;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
-use tantivy::Document;
+use tantivy::Score;
 
 use crate::indexation::field_to_string;
+use crate::indexation::handle::SearchDocument;
 use crate::person::person_fields;
 use crate::server::AppState;
 
@@ -18,6 +19,7 @@ pub struct SearchPersonQuery {
 struct SearchPersonResponse {
     id: String,
     email: String,
+    score: Score,
 }
 
 pub async fn search_people(State(state): State<AppState>, search_query: Query<SearchPersonQuery>) -> impl IntoResponse {
@@ -35,11 +37,12 @@ pub async fn search_people(State(state): State<AppState>, search_query: Query<Se
     }
 }
 
-fn document_to_person(doc: &Document) -> SearchPersonResponse {
+fn document_to_person(sdoc: &SearchDocument) -> SearchPersonResponse {
     let fields = person_fields();
 
     SearchPersonResponse {
-        id: field_to_string(doc, fields.id),
-        email: field_to_string(doc, fields.email),
+        id: field_to_string(&sdoc.doc, fields.id),
+        email: field_to_string(&sdoc.doc, fields.email),
+        score: sdoc.score,
     }
 }

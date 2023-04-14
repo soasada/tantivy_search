@@ -3,9 +3,10 @@ use axum::http::StatusCode;
 use axum::Json;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
-use tantivy::Document;
+use tantivy::Score;
 
 use crate::indexation::field_to_string;
+use crate::indexation::handle::SearchDocument;
 use crate::question::question_fields;
 use crate::server::AppState;
 
@@ -21,6 +22,7 @@ pub struct SearchQuestionResponse {
     public_employment_name: String,
     question_type: String,
     created_at: String,
+    score: Score,
 }
 
 pub async fn search_questions(State(state): State<AppState>,
@@ -39,14 +41,15 @@ pub async fn search_questions(State(state): State<AppState>,
     }
 }
 
-pub fn document_to_question(doc: &Document) -> SearchQuestionResponse {
+pub fn document_to_question(sdoc: &SearchDocument) -> SearchQuestionResponse {
     let fields = question_fields();
 
     SearchQuestionResponse {
-        id: field_to_string(doc, fields.id),
-        question: field_to_string(doc, fields.question),
-        public_employment_name: field_to_string(doc, fields.public_employment_name),
-        question_type: field_to_string(doc, fields.question_type),
-        created_at: field_to_string(doc, fields.created_at),
+        id: field_to_string(&sdoc.doc, fields.id),
+        question: field_to_string(&sdoc.doc, fields.question),
+        public_employment_name: field_to_string(&sdoc.doc, fields.public_employment_name),
+        question_type: field_to_string(&sdoc.doc, fields.question_type),
+        created_at: field_to_string(&sdoc.doc, fields.created_at),
+        score: sdoc.score,
     }
 }

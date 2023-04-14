@@ -22,12 +22,16 @@ pub struct ReIndexQuestion {
     questions: Vec<IndexQuestion>,
 }
 
-fn new_document(question: &IndexQuestion) -> Document {
+pub fn new_document(question: &IndexQuestion) -> Document {
     let fields = question_fields();
 
     doc!(
         fields.id => question.id.clone(),
-        fields.question => question.question.clone())
+        fields.question => question.question.clone(),
+        fields.public_employment_name => question.public_employment_name.clone(),
+        fields.question_type => question.question_type.clone(),
+        fields.created_at => question.created_at.clone(),
+    )
 }
 
 pub async fn index_question(State(state): State<AppState>, Json(payload): Json<IndexQuestion>) -> impl IntoResponse {
