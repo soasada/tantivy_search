@@ -90,13 +90,9 @@ impl IndexActor {
                             let id_term = Term::from_field_text(id_field, id);
 
                             self.writer.delete_term(id_term);
-
-                            if let Err(e) = self.writer.add_document(doc) {
-                                tracing::error!("error adding single document to index: {:?}", e);
-                            } else {
-                                self.must_commit = true;
-                                tracing::info!("{} document with id: {} successfully indexed", &self.name, str_id);
-                            }
+                            self.writer.add_document(doc)?;
+                            self.must_commit = true;
+                            tracing::info!("{} document with id: {} successfully indexed", &self.name, str_id);
 
                             Ok(())
                         } else {

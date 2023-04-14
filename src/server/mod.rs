@@ -49,7 +49,8 @@ pub async fn new_router(backend_env: AppEnv) -> Result<Router, TantivyError> {
 }
 
 async fn new_index_actor(path: &str, schema: Schema, index_name: String, backend_env: AppEnv) -> Result<IndexActorHandle, TantivyError> {
-    fs::create_dir_all(path).unwrap();
+    let path = format!("{}{}", "index/", path);
+    fs::create_dir_all(path.as_str()).unwrap();
     let dir = MmapDirectory::open(path).unwrap();
     IndexActorHandle::new(dir, schema, index_name, backend_env).await
 }
