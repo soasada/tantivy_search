@@ -1,5 +1,6 @@
 use std::env;
 use std::net::SocketAddr;
+use tokio::signal;
 
 use tracing_subscriber::EnvFilter;
 
@@ -27,8 +28,15 @@ impl AppEnv {
     }
 }
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 #[tokio::main]
 async fn main() {
+    #[cfg(feature = "dhat-heap")]
+        let _profiler = dhat::Profiler::new_heap();
+
     let default_env = "development";
     let backend_env = match env::var("BACKEND_SEARCH_ENV") {
         Ok(env_var) => env_var,
@@ -58,6 +66,29 @@ async fn main() {
     tracing::debug!("listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app_router.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    println!("signal received, starting graceful shutdown");
 }
